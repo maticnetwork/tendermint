@@ -1,25 +1,22 @@
 package mempool
 
 import (
+	"errors"
 	"fmt"
 	"math"
-	"reflect"
-	"sync"
 	"time"
-
-	amino "github.com/tendermint/go-amino"
 
 	cfg "github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/libs/clist"
 	"github.com/tendermint/tendermint/libs/log"
+	tmsync "github.com/tendermint/tendermint/libs/sync"
 	"github.com/tendermint/tendermint/p2p"
+	protomem "github.com/tendermint/tendermint/proto/tendermint/mempool"
 	"github.com/tendermint/tendermint/types"
 )
 
 const (
 	MempoolChannel = byte(0x30)
-
-	aminoOverheadForTxMessage = 8
 
 	peerCatchupSleepIntervalMS = 100 // If peer is behind, sleep this amount
 
@@ -41,13 +38,13 @@ type Reactor struct {
 }
 
 type mempoolIDs struct {
-	mtx       sync.RWMutex
+	mtx       tmsync.RWMutex
 	peerMap   map[p2p.ID]uint16
 	nextID    uint16              // assumes that a node will never have over 65536 active peers
 	activeIDs map[uint16]struct{} // used to check if a given peerID key is used, the value doesn't matter
 }
 
-// Reserve searches for the next unused ID and assignes it to the
+// Reserve searches for the next unused ID and assigns it to the
 // peer.
 func (ids *mempoolIDs) ReserveForPeer(peer p2p.Peer) {
 	ids.mtx.Lock()
@@ -110,8 +107,14 @@ func NewReactor(config *cfg.MempoolConfig, mempool *CListMempool) *Reactor {
 		mempool: mempool,
 		ids:     newMempoolIDs(),
 	}
-	memR.BaseReactor = *p2p.NewBaseReactor("Reactor", memR)
+	memR.BaseReactor = *p2p.NewBaseReactor("Mempool", memR)
 	return memR
+}
+
+// InitPeer implements Reactor by creating a state for the peer.
+func (memR *Reactor) InitPeer(peer p2p.Peer) p2p.Peer {
+	memR.ids.ReserveForPeer(peer)
+	return peer
 }
 
 // SetLogger sets the Logger on the reactor and the underlying mempool.
@@ -128,13 +131,15 @@ func (memR *Reactor) OnStart() error {
 	return nil
 }
 
-// GetChannels implements Reactor.
-// It returns the list of channels for this reactor.
+// GetChannels implements Reactor by returning the list of channels for this
+// reactor.
 func (memR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
+	maxMsgSize := memR.config.MaxBatchBytes
 	return []*p2p.ChannelDescriptor{
 		{
-			ID:       MempoolChannel,
-			Priority: 5,
+			ID:                  MempoolChannel,
+			Priority:            5,
+			RecvMessageCapacity: maxMsgSize,
 		},
 	}
 }
@@ -142,8 +147,9 @@ func (memR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 // AddPeer implements Reactor.
 // It starts a broadcast routine ensuring all txs are forwarded to the given peer.
 func (memR *Reactor) AddPeer(peer p2p.Peer) {
-	memR.ids.ReserveForPeer(peer)
-	go memR.broadcastTxRoutine(peer)
+	if memR.config.Broadcast {
+		go memR.broadcastTxRoutine(peer)
+	}
 }
 
 // RemovePeer implements Reactor.
@@ -154,6 +160,8 @@ func (memR *Reactor) RemovePeer(peer p2p.Peer, reason interface{}) {
 
 // Receive implements Reactor.
 // It adds any received transactions to the mempool.
+// XXX: do not call any methods that can block or incur heavy processing.
+// https://github.com/tendermint/tendermint/issues/2888
 func (memR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	msg, err := memR.decodeMsg(msgBytes)
 	if err != nil {
@@ -163,17 +171,17 @@ func (memR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	}
 	memR.Logger.Debug("Receive", "src", src, "chId", chID, "msg", msg)
 
-	switch msg := msg.(type) {
-	case *TxMessage:
-		peerID := memR.ids.GetForPeer(src)
-		err := memR.mempool.CheckTxWithInfo(msg.Tx, nil, TxInfo{SenderID: peerID})
-		if err != nil {
-			memR.Logger.Info("Could not check tx", "tx", txID(msg.Tx), "err", err)
-		}
-		// broadcasting happens from go routines per peer
-	default:
-		memR.Logger.Error(fmt.Sprintf("Unknown message type %v", reflect.TypeOf(msg)))
+	txInfo := TxInfo{SenderID: memR.ids.GetForPeer(src)}
+	if src != nil {
+		txInfo.SenderP2PID = src.ID()
 	}
+	for _, tx := range msg.Txs {
+		err = memR.mempool.CheckTx(tx, nil, txInfo)
+		if err != nil {
+			memR.Logger.Info("Could not check tx", "tx", txID(tx), "err", err)
+		}
+	}
+	// broadcasting happens from go routines per peer
 }
 
 // PeerState describes the state of a peer.
@@ -183,12 +191,9 @@ type PeerState interface {
 
 // Send new mempool txs to peer.
 func (memR *Reactor) broadcastTxRoutine(peer p2p.Peer) {
-	if !memR.config.Broadcast {
-		return
-	}
-
 	peerID := memR.ids.GetForPeer(peer)
 	var next *clist.CElement
+
 	for {
 		// In case of both next.NextWaitChan() and peer.Quit() are variable at the same time
 		if !memR.IsRunning() || !peer.IsRunning() {
@@ -210,9 +215,7 @@ func (memR *Reactor) broadcastTxRoutine(peer p2p.Peer) {
 			}
 		}
 
-		memTx := next.Value.(*mempoolTx)
-
-		// make sure the peer is up to date
+		// Make sure the peer is up to date.
 		peerState, ok := peer.Get(types.PeerStateKey).(PeerState)
 		if !ok {
 			// Peer does not have a state yet. We set it in the consensus reactor, but
@@ -223,16 +226,29 @@ func (memR *Reactor) broadcastTxRoutine(peer p2p.Peer) {
 			time.Sleep(peerCatchupSleepIntervalMS * time.Millisecond)
 			continue
 		}
-		if peerState.GetHeight() < memTx.Height()-1 { // Allow for a lag of 1 block
+
+		// Allow for a lag of 1 block.
+		memTx := next.Value.(*mempoolTx)
+		if peerState.GetHeight() < memTx.Height()-1 {
 			time.Sleep(peerCatchupSleepIntervalMS * time.Millisecond)
 			continue
 		}
 
-		// ensure peer hasn't already sent us this tx
-		if _, ok := memTx.senders.Load(peerID); !ok {
-			// send memTx
-			msg := &TxMessage{Tx: memTx.tx}
-			success := peer.Send(MempoolChannel, cdc.MustMarshalBinaryBare(msg))
+		txs := memR.txs(next, peerID, peerState.GetHeight()) // WARNING: mutates next!
+
+		// send txs
+		if len(txs) > 0 {
+			msg := protomem.Message{
+				Sum: &protomem.Message_Txs{
+					Txs: &protomem.Txs{Txs: txs},
+				},
+			}
+			bz, err := msg.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			memR.Logger.Debug("Sending N txs to peer", "N", len(txs), "peer", peer)
+			success := peer.Send(MempoolChannel, bz)
 			if !success {
 				time.Sleep(peerCatchupSleepIntervalMS * time.Millisecond)
 				continue
@@ -251,40 +267,77 @@ func (memR *Reactor) broadcastTxRoutine(peer p2p.Peer) {
 	}
 }
 
+// txs iterates over the transaction list and builds a batch of txs. next is
+// included.
+// WARNING: mutates next!
+func (memR *Reactor) txs(next *clist.CElement, peerID uint16, peerHeight int64) [][]byte {
+	batch := make([][]byte, 0)
+
+	for {
+		memTx := next.Value.(*mempoolTx)
+
+		if _, ok := memTx.senders.Load(peerID); !ok {
+			// If current batch + this tx size is greater than max => return.
+			batchMsg := protomem.Message{
+				Sum: &protomem.Message_Txs{
+					Txs: &protomem.Txs{Txs: append(batch, memTx.tx)},
+				},
+			}
+			if batchMsg.Size() > memR.config.MaxBatchBytes {
+				return batch
+			}
+
+			batch = append(batch, memTx.tx)
+		}
+
+		n := next.Next()
+		if n == nil {
+			return batch
+		}
+		next = n
+	}
+}
+
 //-----------------------------------------------------------------------------
 // Messages
 
-// MempoolMessage is a message sent or received by the Reactor.
-type MempoolMessage interface{}
-
-func RegisterMempoolMessages(cdc *amino.Codec) {
-	cdc.RegisterInterface((*MempoolMessage)(nil), nil)
-	cdc.RegisterConcrete(&TxMessage{}, "tendermint/mempool/TxMessage", nil)
-}
-
-func (memR *Reactor) decodeMsg(bz []byte) (msg MempoolMessage, err error) {
-	maxMsgSize := calcMaxMsgSize(memR.config.MaxTxBytes)
-	if l := len(bz); l > maxMsgSize {
-		return msg, ErrTxTooLarge{maxMsgSize, l}
+func (memR *Reactor) decodeMsg(bz []byte) (TxsMessage, error) {
+	msg := protomem.Message{}
+	err := msg.Unmarshal(bz)
+	if err != nil {
+		return TxsMessage{}, err
 	}
-	err = cdc.UnmarshalBinaryBare(bz, &msg)
-	return
+
+	var message TxsMessage
+
+	if i, ok := msg.Sum.(*protomem.Message_Txs); ok {
+		txs := i.Txs.GetTxs()
+
+		if len(txs) == 0 {
+			return message, errors.New("empty TxsMessage")
+		}
+
+		decoded := make([]types.Tx, len(txs))
+		for j, tx := range txs {
+			decoded[j] = types.Tx(tx)
+		}
+
+		message = TxsMessage{
+			Txs: decoded,
+		}
+		return message, nil
+	}
+	return message, fmt.Errorf("msg type: %T is not supported", msg)
 }
 
 //-------------------------------------
 
-// TxMessage is a MempoolMessage containing a transaction.
-type TxMessage struct {
-	Tx types.Tx
+// TxsMessage is a Message containing transactions.
+type TxsMessage struct {
+	Txs []types.Tx
 }
 
-// String returns a string representation of the TxMessage.
-func (m *TxMessage) String() string {
-	return fmt.Sprintf("[TxMessage %v]", m.Tx)
-}
-
-// calcMaxMsgSize returns the max size of TxMessage
-// account for amino overhead of TxMessage
-func calcMaxMsgSize(maxTxSize int) int {
-	return maxTxSize + aminoOverheadForTxMessage
+// String returns a string representation of the TxsMessage.
+func (m *TxsMessage) String() string {
+	return fmt.Sprintf("[TxsMessage %v]", m.Txs)
 }

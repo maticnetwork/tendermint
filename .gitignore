@@ -4,17 +4,22 @@
 *.bak
 .DS_Store
 build/*
+artifacts/*
 rpc/test/.tendermint
 .tendermint
 remote_dump
 .revision
 vendor
 .vagrant
+test/e2e/build
+test/maverick/maverick
+test/e2e/networks/*/
 test/p2p/data/
 test/logs
 coverage.txt
 docs/_build
 docs/dist
+docs/.vuepress/dist
 *.log
 abci-cli
 docs/node_modules/
@@ -41,7 +46,5 @@ addrbook.json
 terraform.tfstate
 terraform.tfstate.backup
 terraform.tfstate.d
-
-.vscode
 
 profile\.out

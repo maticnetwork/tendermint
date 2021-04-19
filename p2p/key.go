@@ -1,14 +1,13 @@
 package p2p
 
 import (
-	"bytes"
 	"encoding/hex"
-	"fmt"
 	"io/ioutil"
 
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/ed25519"
-	cmn "github.com/tendermint/tendermint/libs/common"
+	tmjson "github.com/tendermint/tendermint/libs/json"
+	tmos "github.com/tendermint/tendermint/libs/os"
 )
 
 // ID is a hex-encoded crypto.Address
@@ -44,69 +43,52 @@ func PubKeyToID(pubKey crypto.PubKey) ID {
 	return ID(hex.EncodeToString(pubKey.Address()))
 }
 
-// LoadOrGenNodeKey attempts to load the NodeKey from the given filePath.
-// If the file does not exist, it generates and saves a new NodeKey.
+// LoadOrGenNodeKey attempts to load the NodeKey from the given filePath. If
+// the file does not exist, it generates and saves a new NodeKey.
 func LoadOrGenNodeKey(filePath string) (*NodeKey, error) {
-	if cmn.FileExists(filePath) {
+	if tmos.FileExists(filePath) {
 		nodeKey, err := LoadNodeKey(filePath)
 		if err != nil {
 			return nil, err
 		}
 		return nodeKey, nil
 	}
-	return genNodeKey(filePath)
+
+	privKey := ed25519.GenPrivKey()
+	nodeKey := &NodeKey{
+		PrivKey: privKey,
+	}
+
+	if err := nodeKey.SaveAs(filePath); err != nil {
+		return nil, err
+	}
+
+	return nodeKey, nil
 }
 
+// LoadNodeKey loads NodeKey located in filePath.
 func LoadNodeKey(filePath string) (*NodeKey, error) {
 	jsonBytes, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
 	nodeKey := new(NodeKey)
-	err = cdc.UnmarshalJSON(jsonBytes, nodeKey)
+	err = tmjson.Unmarshal(jsonBytes, nodeKey)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading NodeKey from %v: %v", filePath, err)
+		return nil, err
 	}
 	return nodeKey, nil
 }
 
-func genNodeKey(filePath string) (*NodeKey, error) {
-	privKey := ed25519.GenPrivKey()
-	nodeKey := &NodeKey{
-		PrivKey: privKey,
-	}
-
-	jsonBytes, err := cdc.MarshalJSON(nodeKey)
+// SaveAs persists the NodeKey to filePath.
+func (nodeKey *NodeKey) SaveAs(filePath string) error {
+	jsonBytes, err := tmjson.Marshal(nodeKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	err = ioutil.WriteFile(filePath, jsonBytes, 0600)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return nodeKey, nil
-}
-
-//------------------------------------------------------------------------------
-
-// MakePoWTarget returns the big-endian encoding of 2^(targetBits - difficulty) - 1.
-// It can be used as a Proof of Work target.
-// NOTE: targetBits must be a multiple of 8 and difficulty must be less than targetBits.
-func MakePoWTarget(difficulty, targetBits uint) []byte {
-	if targetBits%8 != 0 {
-		panic(fmt.Sprintf("targetBits (%d) not a multiple of 8", targetBits))
-	}
-	if difficulty >= targetBits {
-		panic(fmt.Sprintf("difficulty (%d) >= targetBits (%d)", difficulty, targetBits))
-	}
-	targetBytes := targetBits / 8
-	zeroPrefixLen := (int(difficulty) / 8)
-	prefix := bytes.Repeat([]byte{0}, zeroPrefixLen)
-	mod := (difficulty % 8)
-	if mod > 0 {
-		nonZeroPrefix := byte(1<<(8-mod) - 1)
-		prefix = append(prefix, nonZeroPrefix)
-	}
-	tailLen := int(targetBytes) - len(prefix)
-	return append(prefix, bytes.Repeat([]byte{0xFF}, tailLen)...)
+	return nil
 }

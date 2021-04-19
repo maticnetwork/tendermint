@@ -1,17 +1,19 @@
 package p2p
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	cmn "github.com/tendermint/tendermint/libs/common"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tendermint/tendermint/crypto/ed25519"
+	tmrand "github.com/tendermint/tendermint/libs/rand"
 )
 
 func TestLoadOrGenNodeKey(t *testing.T) {
-	filePath := filepath.Join(os.TempDir(), cmn.RandStr(12)+"_peer_id.json")
+	filePath := filepath.Join(os.TempDir(), tmrand.Str(12)+"_peer_id.json")
 
 	nodeKey, err := LoadOrGenNodeKey(filePath)
 	assert.Nil(t, err)
@@ -22,29 +24,30 @@ func TestLoadOrGenNodeKey(t *testing.T) {
 	assert.Equal(t, nodeKey, nodeKey2)
 }
 
-//----------------------------------------------------------
+func TestLoadNodeKey(t *testing.T) {
+	filePath := filepath.Join(os.TempDir(), tmrand.Str(12)+"_peer_id.json")
 
-func padBytes(bz []byte, targetBytes int) []byte {
-	return append(bz, bytes.Repeat([]byte{0xFF}, targetBytes-len(bz))...)
+	_, err := LoadNodeKey(filePath)
+	assert.True(t, os.IsNotExist(err))
+
+	_, err = LoadOrGenNodeKey(filePath)
+	require.NoError(t, err)
+
+	nodeKey, err := LoadNodeKey(filePath)
+	assert.NoError(t, err)
+	assert.NotNil(t, nodeKey)
 }
 
-func TestPoWTarget(t *testing.T) {
+func TestNodeKeySaveAs(t *testing.T) {
+	filePath := filepath.Join(os.TempDir(), tmrand.Str(12)+"_peer_id.json")
 
-	targetBytes := 20
-	cases := []struct {
-		difficulty uint
-		target     []byte
-	}{
-		{0, padBytes([]byte{}, targetBytes)},
-		{1, padBytes([]byte{127}, targetBytes)},
-		{8, padBytes([]byte{0}, targetBytes)},
-		{9, padBytes([]byte{0, 127}, targetBytes)},
-		{10, padBytes([]byte{0, 63}, targetBytes)},
-		{16, padBytes([]byte{0, 0}, targetBytes)},
-		{17, padBytes([]byte{0, 0, 127}, targetBytes)},
-	}
+	assert.NoFileExists(t, filePath)
 
-	for _, c := range cases {
-		assert.Equal(t, MakePoWTarget(c.difficulty, 20*8), c.target)
+	privKey := ed25519.GenPrivKey()
+	nodeKey := &NodeKey{
+		PrivKey: privKey,
 	}
+	err := nodeKey.SaveAs(filePath)
+	assert.NoError(t, err)
+	assert.FileExists(t, filePath)
 }

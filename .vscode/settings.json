@@ -1,0 +1,17 @@
+{
+  "protoc": {
+    "options": [
+      "--proto_path=${workspaceRoot}/proto",
+      "--proto_path=${workspaceRoot}/third_party/proto"
+    ]
+  },
+  "go.autocompleteUnimportedPackages": true,
+  "go.buildOnSave": "workspace",
+  "go.coverOnSave": true,
+  "go.gotoSymbol.includeImports": true,
+  "go.gotoSymbol.includeGoroot": true,
+  "go.inferGopath": false,
+  "go.toolsEnvVars": {
+
+  }
+}

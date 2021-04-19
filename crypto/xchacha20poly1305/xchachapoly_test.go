@@ -23,10 +23,22 @@ func TestRandom(t *testing.T) {
 		pl := mr.Intn(16384)
 		ad := make([]byte, al)
 		plaintext := make([]byte, pl)
-		cr.Read(key[:])
-		cr.Read(nonce[:])
-		cr.Read(ad)
-		cr.Read(plaintext)
+		_, err := cr.Read(key[:])
+		if err != nil {
+			t.Errorf("error on read: %w", err)
+		}
+		_, err = cr.Read(nonce[:])
+		if err != nil {
+			t.Errorf("error on read: %w", err)
+		}
+		_, err = cr.Read(ad)
+		if err != nil {
+			t.Errorf("error on read: %w", err)
+		}
+		_, err = cr.Read(plaintext)
+		if err != nil {
+			t.Errorf("error on read: %w", err)
+		}
 
 		aead, err := New(key[:])
 		if err != nil {
@@ -37,12 +49,12 @@ func TestRandom(t *testing.T) {
 
 		plaintext2, err := aead.Open(nil, nonce[:], ct, ad)
 		if err != nil {
-			t.Errorf("Random #%d: Open failed", i)
+			t.Errorf("random #%d: Open failed", i)
 			continue
 		}
 
 		if !bytes.Equal(plaintext, plaintext2) {
-			t.Errorf("Random #%d: plaintext's don't match: got %x vs %x", i, plaintext2, plaintext)
+			t.Errorf("random #%d: plaintext's don't match: got %x vs %x", i, plaintext2, plaintext)
 			continue
 		}
 
@@ -50,7 +62,7 @@ func TestRandom(t *testing.T) {
 			alterAdIdx := mr.Intn(len(ad))
 			ad[alterAdIdx] ^= 0x80
 			if _, err := aead.Open(nil, nonce[:], ct, ad); err == nil {
-				t.Errorf("Random #%d: Open was successful after altering additional data", i)
+				t.Errorf("random #%d: Open was successful after altering additional data", i)
 			}
 			ad[alterAdIdx] ^= 0x80
 		}
@@ -58,14 +70,14 @@ func TestRandom(t *testing.T) {
 		alterNonceIdx := mr.Intn(aead.NonceSize())
 		nonce[alterNonceIdx] ^= 0x80
 		if _, err := aead.Open(nil, nonce[:], ct, ad); err == nil {
-			t.Errorf("Random #%d: Open was successful after altering nonce", i)
+			t.Errorf("random #%d: Open was successful after altering nonce", i)
 		}
 		nonce[alterNonceIdx] ^= 0x80
 
 		alterCtIdx := mr.Intn(len(ct))
 		ct[alterCtIdx] ^= 0x80
 		if _, err := aead.Open(nil, nonce[:], ct, ad); err == nil {
-			t.Errorf("Random #%d: Open was successful after altering ciphertext", i)
+			t.Errorf("random #%d: Open was successful after altering ciphertext", i)
 		}
 		ct[alterCtIdx] ^= 0x80
 	}

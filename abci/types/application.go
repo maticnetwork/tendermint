@@ -1,4 +1,4 @@
-package types // nolint: goimports
+package types
 
 import (
 	context "golang.org/x/net/context"
@@ -18,11 +18,17 @@ type Application interface {
 	CheckTx(RequestCheckTx) ResponseCheckTx // Validate a tx for the mempool
 
 	// Consensus Connection
-	InitChain(RequestInitChain) ResponseInitChain    // Initialize blockchain with validators and other info from TendermintCore
+	InitChain(RequestInitChain) ResponseInitChain    // Initialize blockchain w validators/other info from TendermintCore
 	BeginBlock(RequestBeginBlock) ResponseBeginBlock // Signals the beginning of a block
 	DeliverTx(RequestDeliverTx) ResponseDeliverTx    // Deliver a tx for full processing
 	EndBlock(RequestEndBlock) ResponseEndBlock       // Signals the end of a block, returns changes to the validator set
 	Commit() ResponseCommit                          // Commit the state and return the application Merkle root hash
+
+	// State Sync Connection
+	ListSnapshots(RequestListSnapshots) ResponseListSnapshots                // List available snapshots
+	OfferSnapshot(RequestOfferSnapshot) ResponseOfferSnapshot                // Offer a snapshot to the application
+	LoadSnapshotChunk(RequestLoadSnapshotChunk) ResponseLoadSnapshotChunk    // Load a snapshot chunk
+	ApplySnapshotChunk(RequestApplySnapshotChunk) ResponseApplySnapshotChunk // Apply a shapshot chunk
 
 	// Consensus side connection
 	BeginSideBlock(RequestBeginSideBlock) ResponseBeginSideBlock // Signals the beginning of a block with side txs
@@ -83,6 +89,21 @@ func (BaseApplication) BeginSideBlock(req RequestBeginSideBlock) ResponseBeginSi
 
 func (BaseApplication) DeliverSideTx(req RequestDeliverSideTx) ResponseDeliverSideTx {
 	return ResponseDeliverSideTx{}
+}
+func (BaseApplication) ListSnapshots(req RequestListSnapshots) ResponseListSnapshots {
+	return ResponseListSnapshots{}
+}
+
+func (BaseApplication) OfferSnapshot(req RequestOfferSnapshot) ResponseOfferSnapshot {
+	return ResponseOfferSnapshot{}
+}
+
+func (BaseApplication) LoadSnapshotChunk(req RequestLoadSnapshotChunk) ResponseLoadSnapshotChunk {
+	return ResponseLoadSnapshotChunk{}
+}
+
+func (BaseApplication) ApplySnapshotChunk(req RequestApplySnapshotChunk) ResponseApplySnapshotChunk {
+	return ResponseApplySnapshotChunk{}
 }
 
 //-------------------------------------------------------
@@ -149,12 +170,43 @@ func (app *GRPCApplication) EndBlock(ctx context.Context, req *RequestEndBlock) 
 	return &res, nil
 }
 
-func (app *GRPCApplication) BeginSideBlock(ctx context.Context, req *RequestBeginSideBlock) (*ResponseBeginSideBlock, error) {
+func (app *GRPCApplication) ListSnapshots(
+	ctx context.Context, req *RequestListSnapshots) (*ResponseListSnapshots, error) {
+	res := app.app.ListSnapshots(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) OfferSnapshot(
+	ctx context.Context, req *RequestOfferSnapshot) (*ResponseOfferSnapshot, error) {
+	res := app.app.OfferSnapshot(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) LoadSnapshotChunk(
+	ctx context.Context, req *RequestLoadSnapshotChunk) (*ResponseLoadSnapshotChunk, error) {
+	res := app.app.LoadSnapshotChunk(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) ApplySnapshotChunk(
+	ctx context.Context, req *RequestApplySnapshotChunk) (*ResponseApplySnapshotChunk, error) {
+	res := app.app.ApplySnapshotChunk(*req)
+	return &res, nil
+}
+
+//
+// SideTX related methods
+//
+
+func (app *GRPCApplication) BeginSideBlock(
+	ctx context.Context,
+	req *RequestBeginSideBlock) (*ResponseBeginSideBlock, error) {
 	res := app.app.BeginSideBlock(*req)
 	return &res, nil
 }
 
-func (app *GRPCApplication) DeliverSideTx(ctx context.Context, req *RequestDeliverSideTx) (*ResponseDeliverSideTx, error) {
+func (app *GRPCApplication) DeliverSideTx(
+	ctx context.Context, req *RequestDeliverSideTx) (*ResponseDeliverSideTx, error) {
 	res := app.app.DeliverSideTx(*req)
 	return &res, nil
 }

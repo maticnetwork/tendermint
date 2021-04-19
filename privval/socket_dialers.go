@@ -1,13 +1,12 @@
 package privval
 
 import (
+	"errors"
 	"net"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cmn "github.com/tendermint/tendermint/libs/common"
-	p2pconn "github.com/tendermint/tendermint/p2p/conn"
+	"github.com/tendermint/tendermint/crypto"
+	tmnet "github.com/tendermint/tendermint/libs/net"
 )
 
 // Socket errors.
@@ -20,15 +19,15 @@ type SocketDialer func() (net.Conn, error)
 
 // DialTCPFn dials the given tcp addr, using the given timeoutReadWrite and
 // privKey for the authenticated encryption handshake.
-func DialTCPFn(addr string, timeoutReadWrite time.Duration, privKey ed25519.PrivKeyEd25519) SocketDialer {
+func DialTCPFn(addr string, timeoutReadWrite time.Duration, privKey crypto.PrivKey) SocketDialer {
 	return func() (net.Conn, error) {
-		conn, err := cmn.Connect(addr)
+		conn, err := tmnet.Connect(addr)
 		if err == nil {
 			deadline := time.Now().Add(timeoutReadWrite)
 			err = conn.SetDeadline(deadline)
 		}
 		if err == nil {
-			conn, err = p2pconn.MakeSecretConnection(conn, privKey)
+			conn, err = MakeSecretConnection(conn, privKey)
 		}
 		return conn, err
 	}

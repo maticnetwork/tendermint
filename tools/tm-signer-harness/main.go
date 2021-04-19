@@ -61,7 +61,10 @@ Use "tm-signer-harness help <command>" for more information about that command.`
 	}
 
 	runCmd = flag.NewFlagSet("run", flag.ExitOnError)
-	runCmd.IntVar(&flagAcceptRetries, "accept-retries", defaultAcceptRetries, "The number of attempts to listen for incoming connections")
+	runCmd.IntVar(&flagAcceptRetries,
+		"accept-retries",
+		defaultAcceptRetries,
+		"The number of attempts to listen for incoming connections")
 	runCmd.StringVar(&flagBindAddr, "addr", defaultBindAddr, "Bind to this address for the testing")
 	runCmd.StringVar(&flagTMHome, "tmhome", defaultTMHome, "Path to the Tendermint home directory")
 	runCmd.Usage = func() {
@@ -76,7 +79,10 @@ Flags:`)
 	}
 
 	extractKeyCmd = flag.NewFlagSet("extract_key", flag.ExitOnError)
-	extractKeyCmd.StringVar(&flagKeyOutputPath, "output", defaultExtractKeyOutput, "Path to which signing key should be written")
+	extractKeyCmd.StringVar(&flagKeyOutputPath,
+		"output",
+		defaultExtractKeyOutput,
+		"Path to which signing key should be written")
 	extractKeyCmd.StringVar(&flagTMHome, "tmhome", defaultTMHome, "Path to the Tendermint home directory")
 	extractKeyCmd.Usage = func() {
 		fmt.Println(`Extracts a signing key from a local Tendermint instance for use in the remote
@@ -129,8 +135,8 @@ func extractKey(tmhome, outputPath string) {
 	keyFile := filepath.Join(internal.ExpandPath(tmhome), "config", "priv_validator_key.json")
 	stateFile := filepath.Join(internal.ExpandPath(tmhome), "data", "priv_validator_state.json")
 	fpv := privval.LoadFilePV(keyFile, stateFile)
-	pkb := [64]byte(fpv.Key.PrivKey.(ed25519.PrivKeyEd25519))
-	if err := ioutil.WriteFile(internal.ExpandPath(outputPath), pkb[:32], 0644); err != nil {
+	pkb := []byte(fpv.Key.PrivKey.(ed25519.PrivKey))
+	if err := ioutil.WriteFile(internal.ExpandPath(outputPath), pkb[:32], 0600); err != nil {
 		logger.Info("Failed to write private key", "output", outputPath, "err", err)
 		os.Exit(1)
 	}
@@ -138,7 +144,10 @@ func extractKey(tmhome, outputPath string) {
 }
 
 func main() {
-	rootCmd.Parse(os.Args[1:])
+	if err := rootCmd.Parse(os.Args[1:]); err != nil {
+		fmt.Printf("Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 	if rootCmd.NArg() == 0 || (rootCmd.NArg() == 1 && rootCmd.Arg(0) == "help") {
 		rootCmd.Usage()
 		os.Exit(0)
@@ -160,13 +169,19 @@ func main() {
 			os.Exit(1)
 		}
 	case "run":
-		runCmd.Parse(os.Args[2:])
+		if err := runCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Printf("Error parsing flags: %v\n", err)
+			os.Exit(1)
+		}
 		runTestHarness(flagAcceptRetries, flagBindAddr, flagTMHome)
 	case "extract_key":
-		extractKeyCmd.Parse(os.Args[2:])
+		if err := extractKeyCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Printf("Error parsing flags: %v\n", err)
+			os.Exit(1)
+		}
 		extractKey(flagTMHome, flagKeyOutputPath)
 	case "version":
-		fmt.Println(version.Version)
+		fmt.Println(version.TMCoreSemVer)
 	default:
 		fmt.Printf("Unrecognized command: %s\n", flag.Arg(0))
 		os.Exit(1)
